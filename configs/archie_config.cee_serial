@@ -1,0 +1,6 @@
+#!/bin/bash
+make_threads=32
+module purge
+module load sierra-devel
+export CC=$(which gcc)
+export CXX=$(which g++)

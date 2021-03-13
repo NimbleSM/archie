@@ -1,0 +1,10 @@
+#!/bin/bash
+make_threads=32
+module purge
+module load sierra-devel/nvidia
+export CC=$(which gcc)
+export CXX=$(which g++)
+export NVCC_WRAPPER_DEFAULT_COMPILER=$(which g++)
+export backend=cuda
+export kokkos_arch=VOLTA70
+export cuda_arch=70

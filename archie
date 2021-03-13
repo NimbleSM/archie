@@ -1,0 +1,749 @@
+#!/bin/bash -e
+
+set -o pipefail
+
+root_path="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
+cd $root_path
+
+if [[ ! -e archie_config ]]
+then
+  echo "there is no file $root_path/archie_config"
+  echo "please copy one of the provided files, such as"
+  echo "  cp configs/mac archie_config"
+  echo "or create your own"
+  exit -1
+else
+  source archie_config
+fi
+
+package_stack=()
+
+function archie_clone () {
+  rm -rf src/$package
+  if [[ -e packages/$package/git_url ]]
+  then
+    echo "packages/$package/git_url exists"
+    git_url=`cat packages/$package/git_url`
+    echo "running git clone $git_url src/$package"
+    if git clone $git_url src/$package
+    then
+      echo "git clone $git_url succeeded, marking $package clone as not stale"
+      rm -f .archie/$package/clone_is_stale
+    else
+      echo "git clone $git_url failed"
+      exit -1
+    fi
+  else
+    echo "packages/$package/git_url doesn't exist"
+    if ls $root_path/packages/$package/*.tar.gz
+    then
+      tarball=$root_path/packages/$package/*.tar.gz
+      echo "$tarball found"
+      echo "extracting" $tarball "into tmp"
+      mkdir -p .archie/tarball
+      cd .archie/tarball
+      if tar -x -z -f $tarball
+      then
+        mkdir -p $root_path/src
+        echo "moving" $PWD/*/ "to" $root_path/src/$package/
+        rm -rf $root_path/src/$package
+        mv */ $root_path/src/$package
+        cd $root_path
+        echo "tarball clone done, marking $package clone as not stale"
+        rm -f .archie/$package/clone_is_stale
+      else
+        echo "tar failed"
+        exit -1
+      fi
+    else
+      echo "no tarballs or git_url found in packages/$package"
+      exit -1
+    fi
+  fi
+}
+
+function archie_config_with_cmake () {
+  echo "configuring $package with CMake"
+  cmake_prefix_path=""
+  if [[ -e $root_path/.archie/$package/depends_on ]]
+  then
+    for upstream in `cat $root_path/.archie/$package/depends_on`
+    do
+      external_install="external_${upstream}_install"
+      if [[ -z "${!external_install}" ]]
+      then
+        upstream_path="$root_path/install/$upstream"
+      else
+        upstream_path="${!external_install}"
+      fi
+      echo "${upstream}_install=$upstream_path"
+      export ${upstream}_install=$upstream_path
+      cmake_prefix_path+=";$upstream_path"
+    done
+  fi
+  cmake_cmd="$cmake_install/bin/cmake "
+  if [[ -e $root_path/packages/$package/src_subdir ]]
+  then
+    subdir=`cat $root_path/packages/$package/src_subdir`
+    cmake_cmd+="$root_path/src/$package/$subdir "
+  else
+    cmake_cmd+="$root_path/src/$package "
+  fi
+  cmake_cmd+="-DCMAKE_INSTALL_PREFIX=$root_path/install/$package "
+  if [[ ! -z $cmake_prefix_path ]]
+  then
+    cmake_cmd+="-DCMAKE_PREFIX_PATH=\"$cmake_prefix_path\" "
+  fi
+  mkdir -p build/$package
+  cd build/$package
+  echo "sourcing packages/$package/cmake_configure"
+  cmake_args=()
+  export ${package}_src=$root_path/src/$package
+  source $root_path/packages/$package/cmake_configure
+  cmake_cmd+="${cmake_args[@]} "
+  rm -rf CMakeCache.txt CMakeFiles/
+  echo "running: $cmake_cmd"
+  echo "$cmake_cmd" > $root_path/.archie/$package/cmake_command
+  if eval $cmake_cmd
+  then
+    cd $root_path
+    echo "CMake succeeded for $package, marking config as not stale"
+    rm -f .archie/$package/config_is_stale
+  else
+    echo "CMake failed for $package"
+    exit -1
+  fi
+}
+
+function archie_call_package_configure () {
+  if [[ -e $root_path/packages/$package/src_subdir ]]
+  then
+    subdir=`cat $root_path/packages/$package/src_subdir`
+    config_cmd="$root_path/src/$package/$subdir/configure "
+  else
+    config_cmd="$root_path/src/$package/configure "
+  fi
+  config_cmd+="--prefix=$root_path/install/$package "
+  if [[ -e $root_path/packages/$package/depends_on ]]
+  then
+    depends_on=()
+    source $root_path/packages/$package/depends_on
+    for upstream in "${depends_on[@]}"
+    do
+      upstream_path="$root_path/install/$upstream"
+      export ${upstream}_install=$upstream_path
+    done
+  fi
+  mkdir -p build/$package
+  cd build/$package
+  echo "sourcing packages/$package/configure"
+  config_args=()
+  export ${package}_src=$root_path/src/$package
+  source $root_path/packages/$package/configure
+  config_cmd+="${config_args[@]} "
+  echo "running: $config_cmd"
+  echo "$config_cmd" > $root_path/.archie/$package/configure_command
+  if eval $config_cmd
+  then
+    cd $root_path
+    echo "configure succeeded for $package, marking config as not stale"
+    rm -f .archie/$package/config_is_stale
+  else
+    echo "configure failed for $package"
+    exit -1
+  fi
+}
+
+function archie_config_cmake_itself () {
+  mkdir -p build/$package
+  cd build/$package
+  bootstrap_cmd="$root_path/src/cmake/bootstrap "
+  bootstrap_cmd+="--parallel=$make_threads "
+  bootstrap_cmd+="--prefix=$root_path/install/cmake "
+  bootstrap_cmd+="-- -DBUILD_TESTING:BOOL=OFF "
+  bootstrap_cmd+="-DCMAKE_USE_OPENSSL=OFF "
+  echo "running $bootstrap_cmd"
+  if eval $bootstrap_cmd
+  then
+    echo "CMake bootstrap succeeded, marking config as not stale"
+    cd $root_path
+    rm -f .archie/cmake/config_is_stale
+  else
+    echo "CMake bootstrap failed"
+    exit -1
+  fi
+}
+
+function archie_configure () {
+  if [[ "$package" == "cmake" ]]
+  then
+    echo "package is cmake"
+    archie_config_cmake_itself
+    return
+  fi
+  if [[ -e packages/$package/cmake_configure ]]
+  then
+    archie_config_with_cmake
+    return
+  fi
+  if [[ -e packages/$package/configure ]]
+  then
+    archie_call_package_configure
+    return
+  fi
+  echo "couldn't find a way to configure $package"
+  exit -1
+}
+
+function archie_install () {
+  if [[ -e "$root_path/packages/$package/dont_install" ]]
+  then
+    cd build/$package
+    make_cmd="make -j $make_threads"
+    echo "running $make_cmd in build/$package"
+    if eval $make_cmd
+    then
+      echo "make of $package succeeded"
+      if [[ ! -e "$root_path/packages/$package/dont_test" ]]
+      then
+        if [[ -z "${external_cmake_install}" ]]
+        then
+          ctest_exe="$root_path/install/cmake/bin/ctest"
+        else
+          ctest_exe="${external_cmake_install}/bin/ctest"
+        fi
+        echo "running $ctest_exe in $PWD"
+        if $ctest_exe
+        then
+          echo "CTest of $package succeeded, marking install as not stale"
+          cd $root_path
+          rm -f .archie/$package/install_is_stale
+        else
+          echo "CTest of $package failed"
+          exit -1
+        fi
+      else
+        echo "testing of $package disabled by packages/$package/dont_test"
+        echo "marking install as not stale"
+        cd $root_path
+        rm -f .archie/$package/install_is_stale
+      fi
+    else
+      echo "make of $package failed"
+      exit -1
+    fi
+  else
+    cd build/$package
+    make_cmd="make install -j $make_threads"
+    echo "running $make_cmd in build/$package"
+    if eval $make_cmd
+    then
+      echo "make install of $package succeeded"
+      if [[ ! -e "$root_path/packages/$package/dont_test" ]]
+      then
+        if [[ -z "${external_cmake_install}" ]]
+        then
+          ctest_exe="$root_path/install/cmake/bin/ctest"
+        else
+          ctest_exe="${external_cmake_install}/bin/ctest"
+        fi
+        echo "running $ctest_exe in $PWD"
+        if $ctest_exe
+        then
+          echo "CTest of $package succeeded, marking install as not stale"
+          cd $root_path
+          rm -f .archie/$package/install_is_stale
+        else
+          echo "CTest of $package failed"
+          exit -1
+        fi
+      else
+        echo "testing of $package disabled by packages/$package/dont_test"
+        echo "marking install as not stale"
+        cd $root_path
+        rm -f .archie/$package/install_is_stale
+      fi
+    else
+      echo "make install of $package failed"
+      exit -1
+    fi
+  fi
+}
+
+function archie_update_package () {
+  if [[ -e .archie/$package/clone_is_stale ]]
+  then
+    archie_clone
+  fi
+  if [[ -e .archie/$package/config_is_stale ]]
+  then
+    archie_configure
+  fi
+  if [[ -e .archie/$package/install_is_stale ]]
+  then
+    archie_install
+  fi
+}
+
+function archie_push () {
+  package_stack+=("$package")
+}
+
+function archie_pop () {
+  package=${package_stack[${#package_stack[@]}-1]}
+  unset package_stack[${#package_stack[@]}-1]
+}
+
+function archie_clone_staleness () {
+  if [[ -e .archie/$package/clone_is_stale ]]
+  then
+    echo "$package clone was already stale"
+    return
+  fi
+  if [[ ! -d src/$package ]]
+  then
+    echo "$package clone is stale because src/$package doesn't exist"
+    mkdir -p .archie/$package
+    touch .archie/$package/clone_is_stale
+    return
+  fi
+}
+
+function archie_local_staleness () {
+  external_install="external_${package}_install"
+  if [[ ! -z "${!external_install}" ]]
+  then
+    return
+  fi
+  archie_clone_staleness
+  archie_config_staleness
+  archie_local_install_staleness
+}
+
+function archie_config_staleness () {
+  if [[ -e .archie/$package/config_is_stale ]]
+  then
+    echo "$package config was already stale"
+    return
+  fi
+  if [[ ! -d src/$package ]]
+  then
+    echo "$package config is stale because src/$package doesn't exist"
+    mkdir -p .archie/$package
+    touch .archie/$package/config_is_stale
+    return
+  fi
+  if [[ ! -d build/$package ]]
+  then
+    echo "$package config is stale because build/$package doesn't exist"
+    mkdir -p .archie/$package
+    touch .archie/$package/config_is_stale
+    return
+  fi
+}
+
+function archie_local_install_staleness () {
+  if [[ -e .archie/$package/install_is_stale ]]
+  then
+    echo "$package install was already stale"
+    return
+  fi
+  if [[ -e .archie/$package/clone_is_stale ]]
+  then
+    echo "$package install is stale because $package clone is stale"
+    mkdir -p .archie/$package
+    touch .archie/$package/install_is_stale
+    return
+  fi
+  if [[ -e .archie/$package/config_is_stale ]]
+  then
+    echo "$package install is stale because $package config is stale"
+    mkdir -p .archie/$package
+    touch .archie/$package/install_is_stale
+    return
+  fi
+  if [[ ! -d install/$package ]]
+  then
+    echo "$package install is stale because install/$package doesn't exist"
+    mkdir -p .archie/$package
+    touch .archie/$package/install_is_stale
+    return
+  fi
+}
+
+function archie_depends_on () {
+  echo "converting depends_on scripts to depends_on lists"
+  for package_path in packages/*/
+  do
+    package=`basename $package_path`
+    depends_on=()
+    if [[ "$package" != "cmake" ]]
+    then
+      depends_on+=("cmake")
+    fi
+    if [[ -e $package_path/depends_on ]]
+    then
+      source $package_path/depends_on
+    fi
+    mkdir -p .archie/$package
+    echo "${depends_on[@]}" > .archie/$package/depends_on
+  done
+}
+
+function archie_depended_on_by () {
+  echo "determining depended_on_by"
+  for package_path in packages/*/
+  do
+    package=`basename $package_path`
+    mkdir -p .archie/$package
+    rm -f .archie/$package/depended_on_by
+  done
+  for package_path in packages/*/
+  do
+    package=`basename $package_path`
+    for upstream in `cat .archie/$package/depends_on`
+    do
+      echo $package >> .archie/$upstream/depended_on_by
+    done
+  done
+}
+
+function archie_global_staleness () {
+  echo "topsorted_packages = ${topsorted_packages[@]}"
+  for package in "${topsorted_packages[@]}"
+  do
+    archie_local_staleness
+  done
+  for package in "${topsorted_packages[@]}"
+  do
+    for upstream in `cat .archie/$package/depends_on`
+    do
+      if [[ -e .archie/$upstream/install_is_stale ]]
+      then
+        mkdir -p .archie/$package
+        touch .archie/$package/install_is_stale
+      fi
+    done
+  done
+}
+
+function archie_topsort_visit () {
+  if [[ -e .archie/$package/permanent_mark ]]
+  then
+    return
+  fi
+  if [[ -e .archie/$package/temporary_mark ]]
+  then
+    echo "package dependency graph has a cycle!"
+    exit -1
+  fi
+  mkdir -p .archie/$package
+  touch .archie/$package/temporary_mark
+  local external_install="external_${package}_install"
+  if [[ -e packages/$package/always_build ]] && [[ -z "${!external_install}" ]]
+  then
+    mkdir -p .archie/$package
+    echo "marking $package for building due to always_build"
+    touch .archie/$package/should_build
+  fi
+  if [[ -e .archie/$package/depended_on_by ]]
+  then
+    local downstream
+    for downstream in `cat .archie/$package/depended_on_by`
+    do
+      archie_push
+      package=$downstream
+      archie_topsort_visit
+      archie_pop
+      if [[ -e .archie/$downstream/should_build ]] && [[ -z "${!external_install}" ]]
+      then
+        echo "marking $package for building due to $downstream marked for building"
+        touch .archie/$package/should_build
+      fi
+    done
+  fi
+  mkdir -p .archie/$package
+  touch .archie/$package/permanent_mark
+  if [[ -e .archie/$package/should_build ]]
+  then
+    topsorted_packages=("$package" "${topsorted_packages[@]}")
+  fi
+}
+
+function archie_topsort () {
+  echo "sorting dependencies of always_build packages"
+  for package_path in packages/*/
+  do
+    package=`basename $package_path`
+    rm -f .archie/$package/temporary_mark
+    rm -f .archie/$package/permanent_mark
+    rm -f .archie/$package/should_build
+  done
+  topsorted_packages=()
+  for package_path in packages/*/
+  do
+    package=`basename $package_path`
+    if [[ ! -e .archie/$package/temporary_mark ]] && [[ ! -e .archie/$package/permanent_mark ]]
+    then
+      archie_topsort_visit
+    fi
+  done
+}
+
+function archie_global_update () {
+  for package in "${topsorted_packages[@]}"
+  do
+    archie_update_package
+  done
+}
+
+function archie_update () {
+  archie_depends_on
+  archie_depended_on_by
+  archie_topsort
+  archie_global_staleness
+  archie_global_update
+}
+
+function assert_package () {
+  if [[ ! -d packages/$package ]]
+  then
+    echo "packages/$package doesn't exist so $package isn't a package"
+    exit -1
+  fi
+}
+
+function archie_changed_src () {
+  package=`basename $1`
+  assert_package
+  echo "marking $package's install as stale per user request"
+  mkdir -p .archie/$package
+  touch .archie/$package/install_is_stale
+}
+
+function archie_changed_config () {
+  dir=`dirname $1`
+  package=`basename $dir`
+  assert_package
+  echo "marking $package's config as stale per user request"
+  mkdir -p .archie/$package
+  touch .archie/$package/config_is_stale
+}
+
+function archie_changed_clone () {
+  dir=`dirname $1`
+  package=`basename $dir`
+  assert_package
+  echo "marking $package's clone as stale per user request"
+  mkdir -p .archie/$package
+  touch .archie/$package/clone_is_stale
+}
+
+function archie_changed () {
+  if [ -z $1 ]
+  then
+    echo "no argument to archie changed, syntax is:"
+    echo "  archie changed <path>"
+    echo "examples:"
+    echo "  archie changed src/mypackage"
+    exit -1
+  fi
+  case "$1" in
+    src/*)
+      archie_changed_src $1
+      ;;
+    packages/*/cmake_configure)
+      archie_changed_config $1
+      ;;
+    packages/*/depends_on)
+      archie_changed_config $1
+      ;;
+    packages/*/*.tar.gz)
+      archie_changed_clone $1
+      ;;
+    packages/*/git_url)
+      archie_changed_clone $1
+      ;;
+    *)
+      echo "Not reacting to change of $1"
+      ;;
+  esac
+}
+
+function archie_pull_src () {
+  package=`basename $1`
+  assert_package
+  cd src/$package
+  pull_cmd="git pull 2>&1 | tee $root_path/.archie/pull_output"
+  echo "in src/$package, running $pull_cmd"
+  if eval $pull_cmd
+  then
+    echo "git pull in src/$package succeeded"
+    if cat $root_path/.archie/pull_output | grep -q 'Already up-to-date.'
+    then
+      echo "src/$package was already up-to-date"
+    else
+      echo "src/$package modified by git pull"
+      echo "marking $package's install as stale per user request"
+      mkdir -p $root_path/.archie/$package
+      touch $root_path/.archie/$package/install_is_stale
+    fi
+    cd $root_path
+  else
+    echo "git pull in src/$package failed"
+    echo "output was:"
+    cat $root_path/.archie/pull_output
+    exit -1
+  fi
+}
+
+function archie_pull_self () {
+  if git fetch
+  then
+    echo "git fetch succeeded"
+  else
+    echo "git fetch failed"
+    exit -1
+  fi
+  # || true to prevent pipefail-induced exit due to grep -v not finding any results
+  git diff --name-status HEAD..FETCH_HEAD | grep -v "^D" | cut -f 2 > .archie/pull_diff || true
+  if git merge FETCH_HEAD
+  then
+    echo "git merge FETCH_HEAD succeeded"
+    for path in `cat .archie/pull_diff`
+    do
+      archie_changed $path
+    done
+    echo "recursively calling new archie script"
+    $root_path/archie update
+    exit 0
+  else
+    echo "git merge FETCH_HEAD failed"
+    exit -1
+  fi
+}
+
+function archie_pull_all () {
+  for src_path in src/*/
+  do
+    package=`basename $src_path`
+    if [[ -e "packages/$package/git_url" ]]
+    then
+      archie_pull_src "src/$package"
+    fi
+  done
+  archie_pull_self
+}
+
+function archie_pull () {
+  if [ -z $1 ]
+  then
+    echo "no argument to archie pull, syntax is:"
+    echo "  archie pull <path>"
+    echo "examples:"
+    echo "  archie pull src/mypackage"
+    exit -1
+  fi
+  case "$1" in
+    all)
+      archie_pull_all
+      ;;
+    src/*)
+      archie_pull_src $1
+      ;;
+    self)
+      archie_pull_self
+      ;;
+    *)
+      echo "$1 is not a recognized pull argument"
+      exit -1
+      ;;
+  esac
+}
+
+function archie_nightly_check_emails () {
+  if [[ -z $nightly_emails ]]
+  then
+    echo "one or more email address must be specified, such as"
+    echo "  nightly_emails=email1@domain.gov,email2@domain.edu"
+    echo "for the nightly tests to run"
+    exit -1
+  fi
+}
+
+function archie_nightly_check_name () {
+  if [[ -z $nightly_name ]]
+  then
+    echo "a nightly name must be specified, such as"
+    echo "  nightly_build=mac_serial"
+    echo "for the nightly test to run"
+    exit -1
+  fi
+}
+
+function archie_nightly () {
+  archie_nightly_check_emails
+  archie_nightly_check_name
+  nightly_file=$root_path/.archie/nightly.txt
+  nightly_cmd="$root_path/archie pull all"
+  nightly_cmd+=" 2>&1 | tee $nightly_file"
+  mkdir -p $root_path/.archie
+  echo "running $nightly_cmd"
+  if eval $nightly_cmd
+  then
+    echo "nightly test succeeded"
+    exit 0
+  else
+    echo "nightly test failed"
+    mail -s "archie $nightly_name nightly failed" "$nightly_emails" < $nightly_file
+    exit -1
+  fi
+}
+
+if [ -z "$1" ]
+then
+  echo "no command given."
+  echo "available commands are:"
+  echo "  update"
+  echo "ensure all package builds are up-to-date"
+  echo "  changed src/<pkg>"
+  echo "update assuming <pkg> source changed"
+  echo "  changed packages/<pkg>/cmake_configure"
+  echo "update assuming <pkg> CMake options logic changed"
+  echo "  changed packages/<pkg>/git_url"
+  echo "update assuming <pkg> origin URL changed"
+  echo "  changed packages/<pkg>/*.tar.gz"
+  echo "update assuming <pkg> tarball contents changed"
+  echo "  pull self"
+  echo "update the archie repo itself and react to changes"
+  echo "  pull src/<pkg>"
+  echo "update the <pkg> repo and rebuild accordingly"
+  echo "  nightly"
+  echo "run nightly tests and email a log on failure"
+  exit
+fi
+
+case $1 in
+  update)
+    echo "executing update command"
+    archie_update
+    ;;
+  changed)
+    echo "executing changed $2 command"
+    archie_changed $2
+    archie_update
+    ;;
+  pull)
+    echo "executing pull $2 command"
+    archie_pull $2
+    archie_update
+    ;;
+  nightly)
+    echo "executing nightly"
+    archie_nightly
+    ;;
+  *)
+    echo "don't recognize command $1!"
+    exit -1
+    ;;
+esac

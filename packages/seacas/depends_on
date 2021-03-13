@@ -1,0 +1,2 @@
+depends_on+=("netcdf")
+depends_on+=("hdf5")

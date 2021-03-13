@@ -1,0 +1,10 @@
+#!/bin/bash
+cmake_args+=("-DCMAKE_BUILD_TYPE=Release")
+cmake_args+=("-DCMAKE_CXX_EXTENSIONS=ON")
+if [[ "$backend" == "cuda" ]]
+then
+  cmake_args+=("-DCMAKE_CXX_COMPILER=$kokkos_src/bin/nvcc_wrapper")
+  cmake_args+=("-DKokkos_ARCH_$kokkos_arch=ON")
+  cmake_args+=("-DKokkos_ENABLE_CUDA=ON")
+  cmake_args+=("-DKokkos_ENABLE_CUDA_LAMBDA=ON")
+fi

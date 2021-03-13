@@ -1,0 +1,8 @@
+#!/bin/bash
+cmake_args+=("-DCMAKE_CXX_FLAGS=-std=c++14")
+cmake_args+=("-DCMAKE_BUILD_TYPE=Release")
+cmake_args+=("-DCMAKE_PREFIX_PATH=$kokkos_install/lib64/cmake")
+cmake_args+=("-DARBORX_ENABLE_BENCHMARKS=OFF")
+cmake_args+=("-DARBORX_ENABLE_MPI=OFF")
+cmake_args+=("-DARBORX_ENABLE_EXAMPLES=OFF")
+cmake_args+=("-DARBORX_ENABLE_TESTS=OFF")
