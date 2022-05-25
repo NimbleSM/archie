@@ -1,0 +1,5 @@
+#!/bin/bash
+cmake_args+=("-DBUILD_TESTING=ON")
+cmake_args+=("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
+cmake_args+=("-DMPI_C_COMPILER=/usr/lib64/openmpi/bin/mpicc")
+cmake_args+=("-DMPI_CXX_COMPILER=/usr/lib64/openmpi/bin/mpicxx")

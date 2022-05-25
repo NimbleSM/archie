@@ -1,4 +1,5 @@
-depends_on+=("seacas")
-depends_on+=("kokkos")
 depends_on+=("arborx")
 depends_on+=("gtest")
+depends_on+=("kokkos")
+depends_on+=("p3a")
+depends_on+=("seacas")

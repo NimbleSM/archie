@@ -1,0 +1,3 @@
+depends_on+=("kokkos")
+depends_on+=("gtest")
+depends_on+=("mpicpp")
