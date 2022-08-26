@@ -1,5 +1,5 @@
 #!/bin/bash
 cmake_args+=("-DCMAKE_CXX_FLAGS=-std=c++11")
 cmake_args+=("-DCMAKE_BUILD_TYPE=Release")
-cmake_args+=("-DMPI_C_COMPILER=/usr/lib64/openmpi/bin/mpicc")
-cmake_args+=("-DMPI_CXX_COMPILER=/usr/lib64/openmpi/bin/mpicxx")
+#cmake_args+=("-DMPI_C_COMPILER=/usr/lib64/openmpi/bin/mpicc")
+#cmake_args+=("-DMPI_CXX_COMPILER=/usr/lib64/openmpi/bin/mpicxx")

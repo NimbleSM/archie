@@ -4,4 +4,4 @@ export CC=$(which gcc)
 export CXX=$(which g++)
 export MPI_C_COMPILER=$(which mpicc)
 export MPI_CXX_COMPILER=$(which mpicxx)
-
+#echo "MPI: $MPI_C_COMPILER and $MPI_CXX_COMPILER"

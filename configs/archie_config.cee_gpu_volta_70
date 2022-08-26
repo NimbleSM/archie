@@ -8,3 +8,6 @@ export NVCC_WRAPPER_DEFAULT_COMPILER=$(which g++)
 export backend=cuda
 export kokkos_arch=VOLTA70
 export cuda_arch=70
+export MPI_C_COMPILER=$(which mpicc)
+export MPI_CXX_COMPILER=$(which mpicxx)
+

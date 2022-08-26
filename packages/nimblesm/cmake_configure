@@ -5,8 +5,8 @@ cmake_args+=("-DNimbleSM_ENABLE_ARBORX=ON")
 cmake_args+=("-DNimbleSM_ENABLE_P3A=ON")
 cmake_args+=("-Dmpicpp_ROOT=$mpicpp_install")
 cmake_args+=("-Dp3a_INCLUDE_DIR=$p3a_install/include")
-cmake_args+=("-DMPI_C_COMPILER=/usr/lib64/openmpi/bin/mpicc")
-cmake_args+=("-DMPI_CXX_COMPILER=/usr/lib64/openmpi/bin/mpicxx")
+#cmake_args+=("-DMPI_C_COMPILER=/usr/lib64/openmpi/bin/mpicc")
+#cmake_args+=("-DMPI_CXX_COMPILER=/usr/lib64/openmpi/bin/mpicxx")
 if [[ "$backend" == "cuda" ]]
 then
   cmake_args+=("-DCMAKE_CUDA_ARCHITECTURES=$cuda_arch")
